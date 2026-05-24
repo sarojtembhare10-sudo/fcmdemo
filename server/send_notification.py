@@ -1,3 +1,8 @@
+import os
+import time
+import schedule
+import threading
+from flask import Flask
 import firebase_admin
 from firebase_admin import credentials, messaging
 import sys
@@ -5,17 +10,11 @@ import json
 import random
 
 # ---------------------------------------------------------
-# 1. DOWNLOAD YOUR SERVICE ACCOUNT KEY
-# Place your service-account-key.json in the same directory.
+# CLOUD CONFIGURATION (RENDER)
+# Uses Environment Variables in the cloud, falls back to local files for testing
 # ---------------------------------------------------------
-SERVICE_ACCOUNT_KEY_PATH = "service-account-key.json"
-
-# ---------------------------------------------------------
-# 2. PASTE THE DEVICE TOKEN HERE
-# Copy the token printed in your Flutter app's debug console 
-# or from the app UI directly.
-# ---------------------------------------------------------
-DEVICE_TOKEN = "eDjvQ7d5SwSAyAGgkpU6Fd:APA91bEwXPnNfHPEKOTAyI5UFrHJmfLj_pSScX8DmZy6s_0Pmqx7O6hzpf-i0aoxkcES82oinKJllb86Zk9OhGe60sCcw8EgJhWIw2vnK-hjIuSX-MoGlWk"
+SERVICE_ACCOUNT_KEY_PATH = os.getenv("SERVICE_ACCOUNT_KEY_PATH", "service-account-key.json")
+DEVICE_TOKEN = os.getenv("DEVICE_TOKEN", "eDjvQ7d5SwSAyAGgkpU6Fd:APA91bEwXPnNfHPEKOTAyI5UFrHJmfLj_pSScX8DmZy6s_0Pmqx7O6hzpf-i0aoxkcES82oinKJllb86Zk9OhGe60sCcw8EgJhWIw2vnK-hjIuSX-MoGlWk")
 
 def initialize_firebase():
     try:
@@ -61,23 +60,47 @@ def send_notification(notification_data):
     except Exception as e:
         print(f"❌ Error sending message: {e}")
 
-if __name__ == "__main__":
-    print("--- Android Task Notification Server PoC ---")
-    initialize_firebase()
-    
-    # 1. Load the 100 notifications from the JSON file
+def job():
+    print("\n[JOB] Running scheduled notification task...")
     notifications = load_notifications()
     if not notifications:
-        sys.exit(1)
+        print("❌ ERROR: No notifications found. Skipping job.")
+        return
         
-    print(f"📦 Loaded {len(notifications)} task notifications from database.")
-    
-    # 2. Pick a random notification from the list (Simulating a backend event)
     selected_notif = random.choice(notifications)
     
-    print("\n--- 🎯 Selected Notification Payload ---")
+    print("--- 🎯 Selected Notification Payload ---")
     print(json.dumps(selected_notif, indent=2))
-    print("--------------------------------------\n")
+    print("--------------------------------------")
     
-    # 3. Dispatch the notification to FCM
     send_notification(selected_notif)
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "FCM Notification Service is running!"
+
+def run_schedule():
+    print("\n⏳ Scheduler started in background thread. Waiting 15 minutes for the next notification...")
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+if __name__ == "__main__":
+    print("--- Android Task Notification Server PoC (Web Service) ---")
+    initialize_firebase()
+    
+    # Run once immediately on startup
+    job()
+    
+    # Schedule to run every 15 minutes
+    schedule.every(15).minutes.do(job)
+    
+    # Start the scheduling loop in a separate background daemon thread
+    scheduler_thread = threading.Thread(target=run_schedule, daemon=True)
+    scheduler_thread.start()
+    
+    # Start the Flask web server to satisfy Render's port binding requirement
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
