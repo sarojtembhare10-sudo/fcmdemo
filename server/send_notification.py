@@ -30,11 +30,14 @@ def initialize_firebase():
         sys.exit(1)
 
 def load_notifications():
+    # Dynamically find the path so it works whether run from root or server/ folder
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    json_path = os.path.join(script_dir, 'notifications_data.json')
     try:
-        with open('notifications_data.json', 'r') as f:
+        with open(json_path, 'r') as f:
             return json.load(f)
     except FileNotFoundError:
-        print("❌ ERROR: Could not find 'notifications_data.json'. Run 'python generate_mock_data.py' first.")
+        print(f"❌ ERROR: Could not find '{json_path}'. Run 'python generate_mock_data.py' first.")
         return []
 
 def send_notification(notification_data):
