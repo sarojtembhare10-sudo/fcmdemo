@@ -2,6 +2,7 @@ import os
 import time
 import schedule
 import threading
+import requests
 from flask import Flask
 import firebase_admin
 from firebase_admin import credentials, messaging
@@ -81,6 +82,21 @@ app = Flask(__name__)
 def home():
     return "FCM Notification Service is running!"
 
+@app.route('/health')
+def health_check():
+    return {"status": "healthy", "timestamp": time.time()}
+
+def ping_health():
+    # Render automatically sets RENDER_EXTERNAL_URL for web services
+    # If not on Render, it falls back to localhost
+    url = os.environ.get("RENDER_EXTERNAL_URL", "https://fcmdemo.onrender.com")
+    health_url = f"{url}/health"
+    try:
+        response = requests.get(health_url, timeout=10)
+        print(f"[HEALTH-CHECK] Pinged {health_url} - Status Code: {response.status_code}")
+    except Exception as e:
+        print(f"[HEALTH-CHECK] Failed to ping {health_url}: {e}")
+
 def run_schedule():
     print("\n⏳ Scheduler started in background thread. Waiting 15 minutes for the next notification...")
     while True:
@@ -94,8 +110,11 @@ if __name__ == "__main__":
     # Run once immediately on startup
     job()
     
-    # Schedule to run every 15 minutes
+    # Schedule to run every 15 minutes (using your 5 minute change)
     schedule.every(5).minutes.do(job)
+    
+    # Schedule health check every 5 minutes to keep Render awake
+    schedule.every(5).minutes.do(ping_health)
     
     # Start the scheduling loop in a separate background daemon thread
     scheduler_thread = threading.Thread(target=run_schedule, daemon=True)
