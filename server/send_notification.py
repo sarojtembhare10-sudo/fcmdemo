@@ -95,7 +95,7 @@ if __name__ == "__main__":
     job()
     
     # Schedule to run every 15 minutes
-    schedule.every(15).minutes.do(job)
+    schedule.every(5).minutes.do(job)
     
     # Start the scheduling loop in a separate background daemon thread
     scheduler_thread = threading.Thread(target=run_schedule, daemon=True)
