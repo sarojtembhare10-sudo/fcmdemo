@@ -15,7 +15,9 @@ import random
 # Uses Environment Variables in the cloud, falls back to local files for testing
 # ---------------------------------------------------------
 SERVICE_ACCOUNT_KEY_PATH = os.getenv("SERVICE_ACCOUNT_KEY_PATH", "service-account-key.json")
-DEVICE_TOKEN = os.getenv("DEVICE_TOKEN", "eDjvQ7d5SwSAyAGgkpU6Fd:APA91bEwXPnNfHPEKOTAyI5UFrHJmfLj_pSScX8DmZy6s_0Pmqx7O6hzpf-i0aoxkcES82oinKJllb86Zk9OhGe60sCcw8EgJhWIw2vnK-hjIuSX-MoGlWk")
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://dmytgkvgjeeilsxpohnl.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRteXRna3ZnamVlaWxzeHBvaG5sIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTg4MTk2NywiZXhwIjoyMDk1NDU3OTY3fQ.2RKVOLZUsq_AWUqlWtfLovcu4bfvPOaba5EaDbgsOIg")
 
 def initialize_firebase():
     try:
@@ -41,28 +43,47 @@ def load_notifications():
         return []
 
 def send_notification(notification_data):
-    if DEVICE_TOKEN == "PASTE_YOUR_DEVICE_TOKEN_HERE" or not DEVICE_TOKEN:
-        print("❌ ERROR: Please replace DEVICE_TOKEN with your actual FCM token from the app.")
-        return
-
-    print(f"Sending message to token: {DEVICE_TOKEN[:15]}...")
-
-    # Construct the message payload based on the JSON data
-    message = messaging.Message(
-        notification=messaging.Notification(
-            title=notification_data['title'],
-            body=notification_data['body']
-        ),
-        data=notification_data['data'],
-        token=DEVICE_TOKEN,
-    )
-
     try:
-        # Send the message
-        response = messaging.send(message)
-        print(f"✅ Successfully sent message! Message ID: {response}")
+        # Fetch tokens using Supabase REST API instead of the SDK
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}"
+        }
+        response = requests.get(f"{SUPABASE_URL}/rest/v1/device_tokens?select=token", headers=headers)
+        response.raise_for_status()
+        
+        tokens_data = response.json()
+        if not tokens_data:
+            print("❌ ERROR: No device tokens found in Supabase.")
+            return
+            
+        device_tokens = [item['token'] for item in tokens_data if item.get('token')]
+        
+        if not device_tokens:
+            print("❌ ERROR: Tokens retrieved from Supabase are empty.")
+            return
+            
+        print(f"Sending message to {len(device_tokens)} device(s)...")
+
+        # Construct the message payload based on the JSON data
+        message = messaging.MulticastMessage(
+            notification=messaging.Notification(
+                title=notification_data['title'],
+                body=notification_data['body']
+            ),
+            data=notification_data['data'],
+            tokens=device_tokens,
+        )
+
+        try:
+            # Send the message
+            send_response = messaging.send_each_for_multicast(message)
+            print(f"✅ Successfully sent message! {send_response.success_count} messages were sent successfully, {send_response.failure_count} messages failed.")
+        except Exception as e:
+            print(f"❌ Error sending message via FCM: {e}")
+            
     except Exception as e:
-        print(f"❌ Error sending message: {e}")
+        print(f"❌ Error retrieving tokens from Supabase: {e}")
 
 def job():
     print("\n[JOB] Running scheduled notification task...")

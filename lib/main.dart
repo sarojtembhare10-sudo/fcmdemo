@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 // IMPORTANT: This file will be generated when you run `flutterfire configure`.
 // We use a try/catch below in case you haven't run it yet, so the app still compiles.
@@ -21,6 +22,15 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
+  try {
+    await Supabase.initialize(
+      url: 'https://dmytgkvgjeeilsxpohnl.supabase.co',
+      anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRteXRna3ZnamVlaWxzeHBvaG5sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4ODE5NjcsImV4cCI6MjA5NTQ1Nzk2N30.dL1XGBHtrvxjPWJqbc8UGP0-n8VVqg3fackr43_kBps',
+    );
+  } catch (e) {
+    print('Error initializing Supabase: $e');
+  }
+
   try {
     if (defaultTargetPlatform == TargetPlatform.android && !kIsWeb) {
       // On Android, rely entirely on the native google-services.json
@@ -76,6 +86,17 @@ class _FcmHomePageState extends State<FcmHomePage> {
     _setupFCM();
   }
 
+  Future<void> _saveTokenToDatabase(String token) async {
+    try {
+      await Supabase.instance.client.from('device_tokens').upsert({
+        'token': token,
+      });
+      print('✅ Token saved to Supabase');
+    } catch (e) {
+      print('❌ Error saving token to Supabase: $e');
+    }
+  }
+
   Future<void> _setupFCM() async {
     try {
       FirebaseMessaging messaging = FirebaseMessaging.instance;
@@ -96,6 +117,7 @@ class _FcmHomePageState extends State<FcmHomePage> {
         // 1. Listen for token refreshes first, in case initial fetch fails
         messaging.onTokenRefresh.listen((newToken) {
           print("FCM TOKEN REFRESHED: $newToken");
+          _saveTokenToDatabase(newToken);
           if (mounted) {
             setState(() {
               _token = newToken;
@@ -130,6 +152,10 @@ class _FcmHomePageState extends State<FcmHomePage> {
         print("FCM DEVICE TOKEN:");
         print(token);
         print("=======================\n");
+        
+        if (token != null) {
+          _saveTokenToDatabase(token);
+        }
         
         setState(() {
           _token = token;
