@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 // IMPORTANT: This file will be generated when you run `flutterfire configure`.
 // We use a try/catch below in case you haven't run it yet, so the app still compiles.
@@ -23,15 +22,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  try {
-    await Supabase.initialize(
-      url: 'https://dmytgkvgjeeilsxpohnl.supabase.co',
-      anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRteXRna3ZnamVlaWxzeHBvaG5sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4ODE5NjcsImV4cCI6MjA5NTQ1Nzk2N30.dL1XGBHtrvxjPWJqbc8UGP0-n8VVqg3fackr43_kBps',
-    );
-  } catch (e) {
-    print('Error initializing Supabase: $e');
-  }
-
   try {
     if (defaultTargetPlatform == TargetPlatform.android && !kIsWeb) {
       // On Android, rely entirely on the native google-services.json
@@ -80,6 +70,7 @@ class FcmHomePage extends StatefulWidget {
 class _FcmHomePageState extends State<FcmHomePage> {
   String? _token;
   String _messageText = "Waiting for messages...";
+  String _registrationStatus = "Not registered yet";
 
   @override
   void initState() {
@@ -87,14 +78,42 @@ class _FcmHomePageState extends State<FcmHomePage> {
     _setupFCM();
   }
 
-  Future<void> _saveTokenToDatabase(String token) async {
+  /// Saves the FCM token to Firestore so the server can discover it automatically.
+  /// Uses the token string as the document ID — idempotent (safe to call multiple times).
+  Future<void> _registerTokenToFirestore(String token) async {
     try {
-      await Supabase.instance.client.from('device_tokens').upsert({
+      final String platform;
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        platform = 'android';
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        platform = 'ios';
+      } else {
+        platform = 'unknown';
+      }
+
+      await FirebaseFirestore.instance
+          .collection('device_tokens')
+          .doc(token) // Use token as doc ID to prevent duplicates
+          .set({
         'token': token,
-      });
-      print('✅ Token saved to Supabase');
+        'platform': platform,
+        'lastSeen': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)); // merge: true preserves 'createdAt' on updates
+
+      print("✅ Token registered to Firestore successfully.");
+      if (mounted) {
+        setState(() {
+          _registrationStatus = "✅ Registered to server";
+        });
+      }
     } catch (e) {
-      print('❌ Error saving token to Supabase: $e');
+      print("❌ Failed to register token to Firestore: $e");
+      if (mounted) {
+        setState(() {
+          _registrationStatus = "❌ Registration failed";
+        });
+      }
     }
   }
 
@@ -115,16 +134,16 @@ class _FcmHomePageState extends State<FcmHomePage> {
       print('User granted permission: ${settings.authorizationStatus}');
 
       if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-        // 1. Listen for token refreshes first, in case initial fetch fails
+        // 1. Listen for token refreshes — re-register whenever the token changes
         messaging.onTokenRefresh.listen((newToken) {
           print("FCM TOKEN REFRESHED: $newToken");
-          _saveTokenToDatabase(newToken);
           if (mounted) {
             setState(() {
               _token = newToken;
-              _messageText = "Waiting for messages...";
+              _registrationStatus = "Re-registering...";
             });
           }
+          _registerTokenToFirestore(newToken);
         });
 
         // 2. Get the device token with a 3-attempt retry loop
@@ -141,11 +160,12 @@ class _FcmHomePageState extends State<FcmHomePage> {
               if (mounted) {
                 setState(() {
                   _messageText = "Connecting to Google Play Services...\n(Waiting for background sync)";
+                  _registrationStatus = "Waiting for token...";
                 });
               }
-              return; // Stop trying to get the token directly, let onTokenRefresh handle it later
+              return;
             }
-            await Future.delayed(const Duration(seconds: 3)); // Wait 3 seconds and try again
+            await Future.delayed(const Duration(seconds: 3));
           }
         }
 
@@ -153,16 +173,18 @@ class _FcmHomePageState extends State<FcmHomePage> {
         print("FCM DEVICE TOKEN:");
         print(token);
         print("=======================\n");
-        
-        if (token != null) {
-          _saveTokenToDatabase(token);
-        }
-        
+
         setState(() {
           _token = token;
+          _registrationStatus = "Registering...";
         });
 
-        // Handle foreground messages
+        // 3. Register the token to Firestore
+        if (token != null) {
+          await _registerTokenToFirestore(token);
+        }
+
+        // 4. Handle foreground messages
         FirebaseMessaging.onMessage.listen((RemoteMessage message) {
           print('Got a message whilst in the foreground!');
           print('Message data: ${message.data}');
@@ -170,7 +192,6 @@ class _FcmHomePageState extends State<FcmHomePage> {
           if (message.notification != null) {
             print('Message also contained a notification: ${message.notification}');
             
-            // Extract the timestamp
             final time = message.sentTime ?? DateTime.now();
             final timeString = "${time.hour}:${time.minute.toString().padLeft(2, '0')}:${time.second.toString().padLeft(2, '0')}";
             
@@ -225,7 +246,22 @@ class _FcmHomePageState extends State<FcmHomePage> {
                   style: const TextStyle(fontSize: 13, color: Colors.blueGrey, fontFamily: 'monospace'),
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
+              // Registration status badge
+              Center(
+                child: Chip(
+                  label: Text(
+                    _registrationStatus,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  backgroundColor: _registrationStatus.startsWith('✅')
+                      ? Colors.green.shade100
+                      : _registrationStatus.startsWith('❌')
+                          ? Colors.red.shade100
+                          : Colors.orange.shade100,
+                ),
+              ),
+              const SizedBox(height: 8),
               ElevatedButton.icon(
                 onPressed: () {
                   if (_token != null) {
@@ -238,7 +274,7 @@ class _FcmHomePageState extends State<FcmHomePage> {
                 icon: const Icon(Icons.copy),
                 label: const Text('Copy Token'),
               ),
-              const SizedBox(height: 48),
+              const SizedBox(height: 32),
               Container(
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
