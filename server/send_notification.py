@@ -58,15 +58,56 @@ def get_all_device_tokens() -> list[str]:
 
 
 def load_notifications():
-    """Loads mock notification payloads from the local JSON file."""
+    """Loads notification payloads from the local JSON file.
+    Supports both:
+      - New format: {"notifications": [{notification, category, description, id}, ...]}
+      - Legacy format: [{title, body, data}, ...]
+    """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     json_path = os.path.join(script_dir, 'notifications_data.json')
     try:
-        with open(json_path, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print(f"❌ ERROR: Could not find '{json_path}'. Run 'python generate_mock_data.py' first.")
+        with open(json_path, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+
+        # Support new format with wrapper key
+        if isinstance(raw, dict) and 'notifications' in raw:
+            return raw['notifications']
+        # Legacy: plain list
+        if isinstance(raw, list):
+            return raw
+
+        print("❌ ERROR: Unrecognized notifications_data.json format.")
         return []
+    except FileNotFoundError:
+        print(f"❌ ERROR: Could not find '{json_path}'. Add your notifications_data.json to the server/ folder.")
+        return []
+    except json.JSONDecodeError as e:
+        print(f"❌ ERROR: Invalid JSON in notifications_data.json: {e}")
+        return []
+
+
+def build_fcm_payload(notification_data: dict) -> tuple[str, str, dict]:
+    """
+    Converts a notification entry to (title, body, data) for FCM.
+    Handles both the new schema and the legacy mock schema.
+    """
+    # --- New schema: {notification, category, description, id} ---
+    if 'notification' in notification_data:
+        title = notification_data.get('category', 'Notification')
+        body  = notification_data.get('notification', '')
+        data  = {
+            'id':          str(notification_data.get('id', '')),
+            'category':    notification_data.get('category', ''),
+            'description': notification_data.get('description', ''),
+        }
+        return title, body, data
+
+    # --- Legacy schema: {title, body, data} ---
+    return (
+        notification_data.get('title', 'Notification'),
+        notification_data.get('body', ''),
+        notification_data.get('data', {}),
+    )
 
 
 def send_multicast_notification(notification_data: dict, tokens: list[str]):
@@ -77,6 +118,8 @@ def send_multicast_notification(notification_data: dict, tokens: list[str]):
     if not tokens:
         print("⚠️  No device tokens found. Skipping send.")
         return
+
+    title, body, data = build_fcm_payload(notification_data)
 
     total_success = 0
     total_failure = 0
@@ -90,10 +133,10 @@ def send_multicast_notification(notification_data: dict, tokens: list[str]):
 
         message = messaging.MulticastMessage(
             notification=messaging.Notification(
-                title=notification_data['title'],
-                body=notification_data['body'],
+                title=title,
+                body=body,
             ),
-            data=notification_data['data'],
+            data=data,
             tokens=batch_tokens,
         )
 
