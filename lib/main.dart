@@ -185,6 +185,10 @@ class _FcmHomePageState extends State<FcmHomePage> {
           await _registerTokenToFirestore(token);
         }
 
+        // 4. Subscribe to broadcast topic so Firebase Console can reach all devices
+        await messaging.subscribeToTopic('all_devices');
+        print("✅ Subscribed to topic: all_devices");
+
         // 4. Handle foreground messages
         FirebaseMessaging.onMessage.listen((RemoteMessage message) {
           print('Got a message whilst in the foreground!');

@@ -3,7 +3,7 @@ import time
 import schedule
 import threading
 import requests
-from flask import Flask
+from flask import Flask, request
 import firebase_admin
 from firebase_admin import credentials, messaging, firestore
 import sys
@@ -198,6 +198,87 @@ def list_devices():
     """Diagnostic endpoint — lists all registered device tokens."""
     tokens = get_all_device_tokens()
     return {"device_count": len(tokens), "tokens": [t[-15:] + "..." for t in tokens]}
+
+
+@app.route('/send', methods=['POST'])
+def send_custom():
+    """
+    Send a completely custom notification to ALL registered devices instantly.
+
+    POST body (JSON):
+        {
+            "title": "Your title here",
+            "body":  "Your message here"
+        }
+
+    Example curl:
+        curl -X POST https://fcmdemo.onrender.com/send \\
+          -H "Content-Type: application/json" \\
+          -d '{"title": "Hey!", "body": "Custom message here"}'
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return {"error": "Request body must be JSON with 'title' and 'body' fields."}, 400
+
+    title = data.get("title", "").strip()
+    body  = data.get("body", "").strip()
+
+    if not title or not body:
+        return {"error": "Both 'title' and 'body' are required and cannot be empty."}, 400
+
+    tokens = get_all_device_tokens()
+    if not tokens:
+        return {"error": "No devices registered yet."}, 404
+
+    print(f"\n📲 [MANUAL SEND] Title: {title}")
+    print(f"   Body: {body}")
+    print(f"   Devices: {len(tokens)}")
+
+    # Reuse the same multicast logic
+    custom_payload = {
+        "notification": body,
+        "category":     title,
+        "description":  "",
+        "id":           "manual",
+    }
+    send_multicast_notification(custom_payload, tokens)
+
+    return {"status": "sent", "title": title, "body": body, "devices": len(tokens)}
+
+
+@app.route('/send-category', methods=['POST'])
+def send_by_category():
+    """
+    Send a random notification from a specific category to ALL devices.
+
+    POST body (JSON):
+        { "category": "Photos" }
+    """
+    data = request.get_json(silent=True)
+    if not data or "category" not in data:
+        return {"error": "Request body must be JSON with a 'category' field."}, 400
+
+    requested_cat = data["category"].strip().lower()
+    notifications = load_notifications()
+    matches = [n for n in notifications if n.get("category", "").strip().lower() == requested_cat]
+
+    if not matches:
+        return {"error": f"No notifications found for category '{data['category']}'."}, 404
+
+    tokens = get_all_device_tokens()
+    if not tokens:
+        return {"error": "No devices registered yet."}, 404
+
+    selected = random.choice(matches)
+    print(f"\n📲 [CATEGORY SEND] Category: {data['category']}, id: {selected['id']}")
+    send_multicast_notification(selected, tokens)
+
+    return {
+        "status":   "sent",
+        "category": data["category"],
+        "message":  selected["notification"],
+        "devices":  len(tokens),
+    }
 
 
 def ping_health():
